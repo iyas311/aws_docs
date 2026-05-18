@@ -1,7 +1,7 @@
 # AWS Infrastructure Guide
 ### VPC · Route 53 · EC2 · Load Balancers · ACM · Auto Scaling
 
-> **How to use this doc:** Each section follows the pattern: *What it is → Why you need it → Step-by-step console guide*.
+
 
 ---
 
