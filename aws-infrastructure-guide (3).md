@@ -22,7 +22,7 @@
 
 ## 1.1 What is a VPC?
 
-A **Virtual Private Cloud (VPC)** is a logically isolated network you define inside AWS. Think of it as your own private data center in the cloud — you control IP ranges, subnets, route tables, and gateways.
+A **Virtual Private Cloud (VPC)** is a logically isolated network you define inside AWS. Think of it as your own private data center in the cloud — you control IP ranges, subnets, route tables, [...]
 
 **Key components at a glance:**
 
@@ -392,7 +392,7 @@ Traffic → Backup ALB (us-east-1b)
 4. **Run `nslookup api.example.com` again** — IP should now point to Secondary ALB
 5. **Restore** → Re-enable the listener on Primary ALB
 
-> **Production note:** For true high availability, ensure both ALBs are actively serving traffic with the same content. Use **Weighted routing** (instead of Failover) for active-active setups where both regions share load.
+> **Production note:** For true high availability, ensure both ALBs are actively serving traffic with the same content. Use **Weighted routing** (instead of Failover) for active-active setups whe[...]
 
 ---
 
@@ -573,7 +573,7 @@ Traffic → Backup ALB (us-east-1b)
 
 ## 4.1 What is a Load Balancer?
 
-A **Load Balancer** distributes incoming traffic across multiple targets (EC2 instances, containers, Lambda functions) to ensure no single instance is overwhelmed, improving availability and scalability.
+A **Load Balancer** distributes incoming traffic across multiple targets (EC2 instances, containers, Lambda functions) to ensure no single instance is overwhelmed, improving availability and scal[...]
 
 **AWS offers three types:**
 
@@ -699,7 +699,7 @@ ALB can route based on multiple conditions:
 
 ![NLB ALB Chaining Architecture](./images/nlb.png)
 
-**What it is:** Traffic hits the NLB first at Layer 4, which forwards to an ALB as its target. The ALB then handles content-based routing to EC2 instances. This combines the strengths of both load balancers in a single stack.
+**What it is:** Traffic hits the NLB first at Layer 4, which forwards to an ALB as its target. The ALB then handles content-based routing to EC2 instances. This combines the strengths of both loa[...]
 
 **Why you'd use this:**
 
@@ -741,9 +741,9 @@ Client / On-Prem
 4. **Create the NLB** (Section 4.4) and point its listener → this IP-based target group
 5. **Add an Elastic IP** to the NLB so clients have a static entry point
 
-> **Important — ALB IP drift:** ALB IP addresses can change over time as AWS scales the ALB internally. For production, automate IP sync using the **AWS-published Lambda solution** that periodically resolves the ALB DNS and updates the NLB target group. Search for *"AWS blog NLB ALB chaining Lambda"* for the official solution.
+> **Important — ALB IP drift:** ALB IP addresses can change over time as AWS scales the ALB internally. For production, automate IP sync using the **AWS-published Lambda solution** that periodi[...]
 
-> **PrivateLink pattern:** If the goal is to expose a service to other VPCs or AWS accounts, create an **Endpoint Service** on the NLB (EC2 → Load Balancers → select NLB → Integrations → Create endpoint service). Consumers create a VPC Interface Endpoint pointing to your service.
+> **PrivateLink pattern:** If the goal is to expose a service to other VPCs or AWS accounts, create an **Endpoint Service** on the NLB (EC2 → Load Balancers → select NLB → Integrations → [...]
 
 ---
 
@@ -751,7 +751,7 @@ Client / On-Prem
 
 ## 5.1 What is ACM?
 
-**AWS Certificate Manager (ACM)** provisions, manages, and deploys public and private SSL/TLS certificates for use with AWS services. ACM certificates are **free** for use with integrated AWS services (ALB, CloudFront, API Gateway).
+**AWS Certificate Manager (ACM)** provisions, manages, and deploys public and private SSL/TLS certificates for use with AWS services. ACM certificates are **free** for use with integrated AWS ser[...]
 
 **Key concepts:**
 
@@ -839,6 +839,7 @@ An **Auto Scaling Group (ASG)** automatically adjusts the number of EC2 instance
 | **Maximum Capacity** | Ceiling — ASG never exceeds this |
 | **Scaling Policy** | Rules that trigger scale-out (add) or scale-in (remove) |
 | **Health Check** | ASG monitors instances; unhealthy ones are replaced automatically |
+| **Termination Policy** | Decides which instance to remove during scale-in |
 
 **Scaling policies:**
 
@@ -941,7 +942,212 @@ CPU < 30% ───►│  ┌────────────────�
 
 ---
 
-## 6.5 Verify the ASG is Working
+## 6.5 Scaling Policies – Deep Dive
+
+### Target Tracking Scaling (Recommended)
+
+**Best for:** Most use cases. Automatically maintains a target metric value.
+
+**Example: CPU-based scaling**
+1. **EC2 → Auto Scaling Groups** → Select ASG → **Automatic scaling** → **Create scaling policy**
+2. Set:
+   - **Policy type:** Target tracking scaling policy
+   - **Metric type:** Average CPU Utilization
+   - **Target value:** 50%
+3. **Behavior:**
+   - If avg CPU exceeds 50%, ASG launches new instances
+   - If avg CPU drops below 50%, ASG terminates instances
+   - Scales gradually to avoid oscillation
+
+**Custom metric example (ALB request count):**
+1. Create a scaling policy based on: `ALBRequestCountPerTarget`
+   - **Target value:** 1000 requests per instance
+   - ASG launches instances when request count exceeds 1000/instance
+   - Better than CPU for variable workloads (e.g., web APIs)
+
+### Step Scaling (Fine-grained control)
+
+**Best for:** Complex scaling with multiple thresholds.
+
+**Example: Multi-tier scaling**
+1. Create **Scale-Out Alarm:** CPU > 70%
+   - Action: Add 2 instances
+2. Create **Scale-Out Alarm:** CPU > 85%
+   - Action: Add 4 instances
+3. Create **Scale-In Alarm:** CPU < 30%
+   - Action: Remove 1 instance
+
+```
+CPU Utilization Thresholds:
+↑ 85%: Add 4 instances (aggressive)
+↑ 70%: Add 2 instances (moderate)
+------ target zone (50-70%) -------
+↓ 30%: Remove 1 instance (gradual)
+```
+
+### Scheduled Scaling (Time-based)
+
+**Best for:** Predictable traffic patterns (business hours, holidays, events).
+
+**Example: Daily scaling**
+1. **EC2 → Auto Scaling Groups** → Select ASG → **Scheduled actions** → **Create scheduled action**
+2. **Scale-out action:**
+   - **Recurrence:** Cron: `0 9 * * MON-FRI` (9 AM weekdays)
+   - **Desired capacity:** 5 (prepare for work hours)
+3. **Scale-in action:**
+   - **Recurrence:** Cron: `0 18 * * MON-FRI` (6 PM weekdays)
+   - **Desired capacity:** 2 (reduce for evenings)
+
+**Cron expression examples:**
+- `0 9 * * *` — Every day at 9 AM
+- `0 9 * * MON-FRI` — Weekdays at 9 AM
+- `0 0 1 * *` — First day of month at midnight
+- `*/15 * * * *` — Every 15 minutes
+
+### Predictive Scaling (ML-based)
+
+**Best for:** Complex, unpredictable traffic patterns AWS can learn from historical data.
+
+1. **EC2 → Auto Scaling Groups** → Select ASG → **Automatic scaling** → **Create scaling policy**
+2. Set:
+   - **Policy type:** Predictive scaling policy
+   - **ML behavior:** Forecast and scale proactively
+3. **How it works:**
+   - AWS ML analyzes past traffic patterns (14-day history minimum)
+   - Automatically scales ahead of predicted demand
+   - Often used with Target Tracking as a secondary policy
+
+---
+
+## 6.6 Termination Policies (What Gets Removed?)
+
+When scaling in, ASG uses termination policies to decide which instance to remove.
+
+**Default termination policy (recommended):**
+1. Find instances in the AZ with the **most instances**
+2. Find instances using the **oldest launch template version**
+3. If still tied, pick instance **closest to next billing hour** (to minimize charges)
+4. Remove the selected instance
+
+**Custom termination policies:**
+
+| Policy | Behavior |
+|--------|----------|
+| **Default** | Rebalance AZs, prefer oldest launch template, then oldest instance |
+| **OldestInstance** | Remove the oldest instance (good for rolling updates) |
+| **NewestInstance** | Remove newest instance (good for testing) |
+| **OldestLaunchTemplate** | Remove instance with oldest launch template version |
+| **AllocationStrategy** | Follow the Capacity Rebalancing strategy |
+
+**Set custom policy:**
+1. **Auto Scaling Groups** → Select ASG → **Details** tab → **Termination policies**
+2. Select policy order (can specify multiple)
+
+---
+
+## 6.7 Advanced Features
+
+### Instance Refresh (Rolling Updates)
+
+**Purpose:** Replace all instances with a new launch template version without downtime.
+
+**Example:** Update web server from Apache 2.4 to 2.5
+
+1. Update launch template: `web-server-lt` → create new version with Apache 2.5
+2. **Auto Scaling Groups** → Select ASG → **Instance refresh** → **Start instance refresh**
+3. Set:
+   - **Strategy:** Rolling (gradually replace)
+   - **Instance warmup:** 300 seconds (let instance stabilize before next replacement)
+   - **Min healthy percentage:** 90% (keep 90% of instances running)
+4. AWS automatically:
+   - Launches new instance with Apache 2.5
+   - Deregisters old instance from ALB
+   - Waits for graceful shutdown
+   - Removes old instance
+   - Repeats until all instances replaced
+
+### Warm Pools (Reduce Launch Latency)
+
+**Purpose:** Pre-warm spare instances to reduce scale-out time from ~5 minutes to ~10 seconds.
+
+**Best for:** Latency-sensitive apps (gaming, real-time trading, critical APIs).
+
+**Example:**
+1. **Auto Scaling Groups** → Select ASG → **Instance refresh** → **Manage warm pool**
+2. Set:
+   - **Warm pool size:** 2 (maintain 2 pre-warmed instances)
+   - **Reuse on scale-out:** Yes (move warmed instances to active group on scale-out)
+3. **Cost consideration:**
+   - Warm instances are running → you pay for them
+   - Trade-off: Higher cost vs faster scaling
+
+**Under the hood:**
+```
+Without Warm Pool:
+Scale-up triggered → Launch instance (5 min) → Install software → Start → Active
+                    Time to serve traffic: ~5 minutes
+
+With Warm Pool:
+Scale-up triggered → Activate warm instance → Already has software → Serve traffic
+                    Time to serve traffic: ~10 seconds
+```
+
+### Capacity Rebalancing (For Spot Instances)
+
+**Purpose:** Automatically replace Spot instances at risk of termination before AWS terminates them.
+
+**Scenario:** You use Spot instances to save 70% on cost. AWS can reclaim Spot instances with 2-minute warning. Capacity Rebalancing launches replacements proactively.
+
+1. **Auto Scaling Groups** → Select ASG → **Details** tab → **Capacity rebalancing:** Enable
+2. **How it works:**
+   - Spot instance receives 2-minute termination notice
+   - ASG immediately launches replacement instance
+   - Old Spot instance terminates gracefully
+   - No downtime
+
+
+---
+
+## 6.8 Lifecycle Hooks (Graceful Shutdown)
+
+**Purpose:** Run custom logic (logging, cleanup, draining connections) before instance is removed.
+
+**Example: Drain connections from ALB before scale-in**
+
+1. **Auto Scaling Groups** → Select ASG → **Lifecycle hooks** → **Create lifecycle hook**
+2. Set:
+   - **Hook name:** `before-terminate`
+   - **Instance state:** Terminating
+   - **Action on timeout:** Continue (or Abandon if custom action fails)
+   - **Heartbeat timeout:** 300 seconds (give script 5 min to run)
+3. Set **EventBridge notification:** Send termination event to SNS/Lambda
+4. **Lambda function example** (runs when instance is terminating):
+   ```python
+   def lambda_handler(event, context):
+       instance_id = event['detail']['EC2InstanceId']
+       asg_name = event['detail']['AutoScalingGroupName']
+       
+       # Deregister from ALB (graceful drain)
+       alb_client.deregister_targets(
+           TargetGroupArn='arn:aws:elasticloadbalancing:...',
+           Targets=[{'Id': instance_id}]
+       )
+       
+       # Wait for connections to drain
+       time.sleep(30)
+       
+       # Notify ASG to continue termination
+       asg_client.complete_lifecycle_action(
+           LifecycleActionResult='CONTINUE',
+           LifecycleHookName='before-terminate',
+           AutoScalingGroupName=asg_name,
+           InstanceId=instance_id
+       )
+   ```
+
+---
+
+## 6.9 Verify the ASG is Working
 
 1. **EC2 → Auto Scaling Groups** → Select `web-asg` → **Activity** tab
    - Shows all scaling events (launch, terminate)
@@ -953,7 +1159,31 @@ CPU < 30% ───►│  ┌────────────────�
    sudo yum install -y stress
    stress --cpu 4 --timeout 300
    ```
-   Watch CloudWatch alarm trigger and ASG launch new instances.
+   Watch ASG launch new instances as CPU exceeds threshold.
+
+---
+
+## 6.10 Common ASG Patterns
+
+### Blue-Green Deployment
+
+**Scenario:** Deploy new app version without downtime.
+
+1. Create new ASG `web-asg-green` with new app version
+2. Route 10% traffic to green, 90% to blue using **Route 53 Weighted routing**
+3. Monitor green instances for 1 hour
+4. If healthy, shift 100% traffic to green
+5. Terminate blue ASG
+
+### Canary Deployment
+
+**Scenario:** Test new version with small traffic percentage.
+
+1. Update launch template with new version
+2. Set **Target Tracking: ALB Request Count = 100 requests/instance**
+3. Route only 5% traffic to new version using Route 53
+4. Monitor error rates, latency
+5. Gradually increase traffic: 5% → 10% → 25% → 100%
 
 ---
 
@@ -982,9 +1212,9 @@ CPU < 30% ───►│  ┌────────────────�
 | Problem | Cause | Solution |
 |---------|-------|----------|
 | ALB stuck in provisioning | Resource quota exceeded or service failure | Wait 5 minutes; check **Service Quotas → Application Load Balancers** for limits |
-| Targets UnHealthy but instances running | Health check misconfigured or security group blocking check | Check target group **Health check** settings; add egress rule allowing return traffic on health check port |
-| Path-based routing not working | Listener rule order is wrong | Go **ALB → Listeners → HTTP:80 → View/Edit rules** → ensure most-specific paths come first (e.g., `/api/v2/*` before `/api/*`) |
-| Sticky sessions not working | Cookie-based stickiness requires instant target resolution | Use ALB stickiness duration (not appropriate for short-lived connections); consider NLB if you need true TCP stickiness |
+| Targets UnHealthy but instances running | Health check misconfigured or security group blocking check | Check target group **Health check** settings; add egress rule allowing return traffic on [...] |
+| Path-based routing not working | Listener rule order is wrong | Go **ALB → Listeners → HTTP:80 → View/Edit rules** → ensure most-specific paths come first (e.g., `/api/v2/*` before `/ap[...] |
+| Sticky sessions not working | Cookie-based stickiness requires instant target resolution | Use ALB stickiness duration (not appropriate for short-lived connections); consider NLB if you need tr[...] |
 
 ## Auto Scaling Issues
 
@@ -993,75 +1223,14 @@ CPU < 30% ───►│  ┌────────────────�
 | ASG not launching instances | Desired capacity > Maximum capacity or AMI being deleted | Check ASG config: **desired ≤ max**; verify AMI exists in region |
 | Repeatedly launching/terminating | Health check grace period too short for app startup | Increase **Health check grace period** to 300+ seconds (app needs time to boot) |
 | New instances fail health check immediately | App not starting or listening on required port | SSH into instance: `curl localhost:80`; check logs: `/var/log/cloud-init-output.log` for user data errors |
-| Scaling policy not triggering | Metric alarm not configured or threshold too high | Go **CloudWatch → Alarms** → check if alarm is in OK state; lower target CPU threshold for testing |
+| Scaling policy not triggering | Metric alarm not configured or threshold too high | Check ASG Activity history; verify metric is being reported; lower threshold for testing |
+| Instances stuck in "Terminating" state | Lifecycle hook timeout too short or custom script failing | Increase heartbeat timeout; check Lambda/SNS handler logs for errors |
+| Scale-in removes wrong instances | Termination policy mismatch or AZ imbalance | Verify termination policy order; check AZ distribution in ASG Details |
 
 ## Route 53 Issues
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| Domain still pointing to old host | DNS TTL cache not expired | Wait for TTL (usually 300-900 seconds) or reduce TTL before making changes; use `nslookup` to verify |
-| Health check always failing | Incorrect path, port, or firewall blocking | Test health check manually: `curl -v https://your-alb-dns/health`; verify security group allows health check |
-| Failover not working | Secondary record not created or health check on secondary (creates double failure scenario) | Verify secondary record exists with Failover → **Secondary**; health check should ONLY be on Primary |
-| Nameservers not updated | DNS propagation delay or wrong nameserver format | Check GoDaddy shows correct nameservers (remove trailing dots); use `dig NS example.com` to verify |
-
-## ACM Certificate Issues
-
-| Problem | Cause | Solution |
-|---------|-------|----------|
-| Certificate stuck in Pending validation | CNAME record not added to DNS or typo in record | Go **ACM → Certificates** → expand certificate → copy exact Name/Value pairs → add to Route 53 exactly |
-| Certificate not appearing in ALB dropdown | Certificate not validated or in wrong region | Certificates are region-specific; must be in same region as ALB; wait for validation to complete (usually 5-30 min) |
-| HTTPS on ALB but certificate warning in browser | Certificate hostname mismatch | Ensure certificate covers `example.com` OR `*.example.com`; re-request if needed with correct domain names |
-
-## Cost Prevention
-
-| Resource | Cost Risk | Prevention |
-|----------|-----------|------------|
-| Elastic IP | Charged if allocated but not associated | Delete unused EIPs: **EC2 → Elastic IPs → Release address** |
-| NAT Gateway | Charged per hour + data transfer | Delete unused NAT gateways; consider VPC endpoints for S3/DynamoDB instead |
-| Running instances | Charges while running | Stop (not terminate) for temp instances; use ASG to scale down during low traffic |
-| EBS volumes | Charged per GB stored | Delete unused snapshots and volumes: **EC2 → Volumes/Snapshots → Delete** |
-| Data transfer out | Expensive for large volumes | Use CloudFront for static content; S3 VPC endpoints to avoid NAT charges |
-
----
-
-# Summary Architecture
-
-![Full Architecture Summary](./images/all.png)
-
-```
-                          Internet
-                             │
-                    ┌────────▼────────┐
-                    │ Route 53 (DNS)  │
-                    │ example.com     │
-                    └────────┬────────┘
-                             │
-                    ┌────────▼────────┐
-                    │ ACM Certificate │
-                    │ (TLS/SSL)       │
-                    └────────┬────────┘
-                             │ HTTPS
-                    ┌────────▼────────┐
-                    │ Internet-Facing │
-                    │ ALB             │
-                    └──┬──────────┬───┘
-                       │          │
-          ┌────────────▼──┐  ┌───▼────────────┐
-          │   AZ-1a        │  │   AZ-1b        │
-          │  Private Subnet│  │  Private Subnet│
-          │ ┌────────────┐ │  │ ┌────────────┐ │
-          │ │EC2 Instance│ │  │ │EC2 Instance│ │
-          │ │(ASG managed)│ │  │ │(ASG managed)│ │
-          │ └────────────┘ │  │ └────────────┘ │
-          │       │        │  │       │        │
-          │ ┌─────▼──────┐ │  │ ┌─────▼──────┐ │
-          │ │  Database  │ │  │ │  Database  │ │
-          │ │  (RDS/AZ)  │ │  │ │ (Standby)  │ │
-          │ └────────────┘ │  │ └────────────┘ │
-          └────────────────┘  └────────────────┘
-                    VPC (10.0.0.0/16)
-```
-
-
-
-
+| DNS not resolving | Nameservers not updated or DNS propagation pending | Run `dig NS example.com`; if old nameservers show, wait 24-48 hours or check domain registrar settings |
+| Health check failing | Target unreachable or health endpoint misconfigured | Verify security groups allow health check traffic; test endpoint manually: `curl -v https://alb-dns/health` |
+| Failover not working | Primary health check not attached or secondary not configured | Ensure Primary record has health check; Secondary record exists with no health check |
